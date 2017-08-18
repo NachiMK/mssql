@@ -407,33 +407,53 @@ SELECT	 DatabaseName   = R.DatabaseName
 		,S.StatsUpdateDate
 		,MI.LastSeekDate
 INTO	#ResultDetail
-FROM	#TableRowCount				R
+FROM	#AllTables A
 LEFT
-JOIN	#index_usage				IU	ON	IU.DatabaseId	= R.DatabaseId
-										AND	IU.SchemaId		= R.SchemaId
-										AND	IU.TableId		= R.TableId
+JOIN	#TableRowCount				R	ON	R.DatabaseId	= A.DatabaseId
+										AND	R.SchemaId		= A.SchemaId
+										AND	R.TableId		= A.TableId
 LEFT
-JOIN	#Stats						S	ON	S.DatabaseId	= R.DatabaseId
-										AND	S.SchemaId		= R.SchemaId
-										AND	S.TableId		= R.TableId
+JOIN	#index_usage				IU	ON	IU.DatabaseId	= A.DatabaseId
+										AND	IU.SchemaId		= A.SchemaId
+										AND	IU.TableId		= A.TableId
 LEFT
-JOIN	#TablesMissingIndexes		MI	ON	MI.DatabaseId	= R.DatabaseId
-										AND	MI.SchemaId		= R.SchemaId
-										AND	MI.TableId		= R.TableId
+JOIN	#Stats						S	ON	S.DatabaseId	= A.DatabaseId
+										AND	S.SchemaId		= A.SchemaId
+										AND	S.TableId		= A.TableId
+LEFT
+JOIN	#TablesMissingIndexes		MI	ON	MI.DatabaseId	= A.DatabaseId
+										AND	MI.SchemaId		= A.SchemaId
+										AND	MI.TableId		= A.TableId
 ORDER BY
 		R.DatabaseName, R.SchemaName, R.TableName
 
 
-SELECT	*
-FROM	#ResultDetail
+SELECT	 [DB Name]				= R.DatabaseName   
+		,[Schema Name]			= R.SchemaName
+		,[Table Name]			= R.TableName
+		,[Row Count]			= R.[RowCount]
+		,[Table Size (MB)]		= R.TotalSizeInMB
+		,[Table Created On**]	= R.create_date
+		,[Table Modified On**]	= R.modify_date
+		,[Total Reads*]			= R.ReadCount
+		,[Total Writes*]		= R.WriteCount
+		,[Last Read Date*]		= R.LastReadDate
+		,[Last Write Date*]		= R.LastWriteDate
+		,HasStats				= CASE WHEN R.HasStats = 1 THEN 'Yes' ELSE 'No' END
+		,[Stats Updated*]		= R.StatsUpdateDate
+		,[Missing Index*]		= R.LastSeekDate
 
-SELECT	 DatabaseName
-		,SchemaName
-		,TableName
-		,UsedWithinLast6Months	= CASE WHEN (LastestDate > DATEADD(mm, -6, GETDATE())) THEN 1 ELSE 0 END
-		,LastUsedDate			= LastestDate
-		,[RowCount]
-		,TotalSizeInMB
+FROM	#ResultDetail R
+ORDER BY
+		R.DatabaseName, R.SchemaName, R.TableName
+
+SELECT	 [DB Name]	=	DatabaseName
+		,[SchemaId] =	SchemaName
+		,[TableId]	=	TableName
+		,[Used Since 7/30/2017]	= CASE WHEN (LastestDate > DATEADD(mm, -6, GETDATE())) THEN 'Yes' ELSE 'No' END
+		,[Last Used Date]		= LastestDate
+		,[Row Count]			= [RowCount]
+		,[Table Size (MB)]		= TotalSizeInMB
 FROM	#ResultDetail R
 CROSS	APPLY
 		(
@@ -442,12 +462,19 @@ CROSS	APPLY
 				VALUES(create_date),(modify_date),(LastReadDate),(LastWriteDate),(StatsUpdateDate),(LastSeekDate)
 			 )	AS v(value)
 		)	MD
+ORDER BY
+	R.DatabaseName, R.SchemaName, R.TableName
 
+/*
 -- Sanity Checks
 SELECT	*
 FROM	#AllTables A
 WHERE	NOT EXISTS (SELECT 1 FROM #ResultDetail R WHERE R.DatabaseId = A.DatabaseId AND R.SchemaId = A.SchemaId AND R.TableId = A.TableId)
 
+-- Sanity Checks
+SELECT	*
+FROM	#AllTables A
+WHERE	NOT EXISTS (SELECT 1 FROM #TableRowCount R WHERE R.DatabaseId = A.DatabaseId AND R.SchemaId = A.SchemaId AND R.TableId = A.TableId)
 
 SELECT (SELECT count(*) FROM #AllTables) - (SELECT count(*) FROM #TableRowCount )
 
@@ -458,6 +485,23 @@ FROM (
 	SELECT DatabaseId, Cnt = count(*) FROM #TableRowCount group by DatabaseId 
 	) F
 
-SELECT DB_NAME(DatabaseId), DatabaseId, Cnt = count(*) FROM #AllTables group by DatabaseId 
-EXCEPT
-SELECT DB_NAME(DatabaseId), DatabaseId, Cnt = count(*) FROM #TableRowCount group by DatabaseId 
+SELECT	 DB_NAME(DatabaseId)
+		,DatabaseId
+		,CntAllTables = COUNT(*)
+		,CntInTmpTable = SUM(C.Cnt)
+		,Delta		  = COUNT(*) - SUM(C.Cnt)
+FROM	#AllTables	A
+CROSS
+APPLY	(
+			SELECT	Cnt = count(*)
+			FROM	#TableRowCount T
+			WHERE	T.DatabaseId	=	A.DatabaseId
+			AND		T.SchemaId		=	A.SchemaId
+			AND		T.TableId		=	A.TableId
+			GROUP BY
+					T.DatabaseId 
+		) C
+GROUP BY
+		DatabaseId 
+
+*/

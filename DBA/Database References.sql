@@ -13,66 +13,79 @@ SET NOCOUNT ON;
 
 IF OBJECT_ID('tempdb..#databases') IS NOT NULL
 	DROP TABLE #databases
-CREATE TABLE #databases(
-    database_id int, 
-    database_name sysname
+CREATE TABLE #databases
+(
+     database_id	INT
+    ,database_name	SYSNAME
 );
 
 -- ignore systems databases
-INSERT INTO #databases(database_id, database_name)
-SELECT database_id, name FROM sys.databases
-WHERE database_id > 4
-and   name NOT LIKE 'ASPState%'
-and   name NOT LIKE 'CommonDB%'
-and   name NOT LIKE 'CustomerGUID_Archive%'
-and   name NOT LIKE 'DBA%'
-and   name NOT LIKE 'IISLogs%'
-and   name NOT LIKE 'Private%'
-and   name NOT LIKE 'TCS_%'
+INSERT INTO 
+		#databases(database_id, database_name)
+SELECT	database_id, name
+FROM	sys.databases
+WHERE	database_id > 4
 ;
 
 DECLARE 
-    @database_id int, 
-    @database_name sysname, 
-    @sql varchar(max);
+	 @database_id	INT 
+    ,@database_name	SYSNAME 
+    ,@sql			VARCHAR(MAX);
 
 IF OBJECT_ID('tempdb..#dependencies') IS NOT NULL
 	DROP TABLE #dependencies
-CREATE TABLE #dependencies(
-    referencing_database varchar(max),
-    referencing_schema varchar(max),
-    referencing_object_name varchar(max),
-    referenced_server varchar(max),
-    referenced_database varchar(max),
-    referenced_schema varchar(max),
-    referenced_object_name varchar(max)
+CREATE TABLE #dependencies
+(
+     referencing_database		VARCHAR(MAX)
+    ,referencing_schema			VARCHAR(MAX)
+    ,referencing_object_name	VARCHAR(MAX)
+    ,referenced_server			VARCHAR(MAX)
+    ,referenced_database		VARCHAR(MAX)
+    ,referenced_schema			VARCHAR(MAX)
+    ,referenced_object_name		VARCHAR(MAX)
 );
 
-WHILE (SELECT COUNT(*) FROM #databases) > 0 BEGIN
-    SELECT TOP 1 @database_id = database_id, 
-                 @database_name = database_name 
-    FROM #databases;
+WHILE (SELECT COUNT(*) FROM #databases) > 0
+BEGIN
 
-    SET @sql = 'INSERT INTO #dependencies select 
-        DB_NAME(' + convert(varchar,@database_id) + '), 
-        OBJECT_SCHEMA_NAME(referencing_id,' 
-            + convert(varchar,@database_id) +'), 
-        OBJECT_NAME(referencing_id,' + convert(varchar,@database_id) + '), 
-        referenced_server_name,
-        ISNULL(referenced_database_name, db_name(' 
-             + convert(varchar,@database_id) + ')),
-        referenced_schema_name,
-        referenced_entity_name
-    FROM ' + quotename(@database_name) + '.sys.sql_expression_dependencies';
+	SELECT	TOP 1
+			 @database_id	= database_id
+			,@database_name	= database_name 
+	FROM	#databases;
 
-    EXEC(@sql);
+	BEGIN TRY
 
-    DELETE FROM #databases WHERE database_id = @database_id;
+		SET @sql = 'INSERT INTO #dependencies select 
+			DB_NAME(' + convert(varchar,@database_id) + '), 
+			OBJECT_SCHEMA_NAME(referencing_id,' 
+				+ convert(varchar,@database_id) +'), 
+			OBJECT_NAME(referencing_id,' + convert(varchar,@database_id) + '), 
+			referenced_server_name,
+			ISNULL(referenced_database_name, db_name(' 
+				 + convert(varchar,@database_id) + ')),
+			referenced_schema_name,
+			referenced_entity_name
+		FROM ' + quotename(@database_name) + '.sys.sql_expression_dependencies';
+
+		EXEC(@sql);
+	END TRY
+	BEGIN CATCH
+		PRINT '------'
+		PRINT 'Error finding references in DB:' + @database_name
+		PRINT 'Error Message :' + ERROR_MESSAGE()
+		PRINT 'Error Number  :' + CONVERT(NVARCHAR, ERROR_NUMBER())
+		PRINT 'Error Line    :' + CONVERT(NVARCHAR, ERROR_LINE())
+		PRINT 'Error Severity:' + CONVERT(NVARCHAR, ERROR_SEVERITY())
+		PRINT '------'
+	END CATCH
+	
+	DELETE FROM #databases WHERE database_id = @database_id;
 END;
 
-SELECT * FROM #dependencies;
+SELECT	*
+FROM	#dependencies;
 
--- DB Dependencies
+-- Distinct List of Databases, dependent databases, and count of referenced objects
 SELECT	 [Database Name]			= referencing_database
 		,[Referenced Database]		= referenced_database
 		,[# of Referenced Objects]	= COUNT(DISTINCT referenced_object_name)
@@ -86,7 +99,7 @@ ORDER BY
 		,referenced_database
 ;
 
--- DBs in use
+-- Distinct list of DBs in use
 SELECT DISTINCT [Database Name] =  referencing_database FROM #dependencies
 UNION 
 SELECT DISTINCT [Database Name] =  referenced_database FROM #dependencies;

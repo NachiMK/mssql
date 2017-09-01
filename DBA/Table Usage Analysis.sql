@@ -37,6 +37,7 @@ IF OBJECT_ID('tempdb..#AllTables') IS NOT NULL
 CREATE TABLE #AllTables
 (
 	 DatabaseId		BIGINT
+	,SchemaName		SYSNAME
 	,SchemaId		BIGINT
 	,TableId		BIGINT
 	,TableName		SYSNAME
@@ -91,6 +92,22 @@ CREATE TABLE #TablesMissingIndexes
 	,TableId		BIGINT
 	,LastSeekDate	DATETIME2
 )
+
+IF OBJECT_ID('tempdb..#dependencies') IS NOT NULL
+	DROP TABLE #dependencies
+CREATE TABLE #dependencies
+(
+	 Referencing_DatabaseId		BIGINT
+	,Referencing_Object			SYSNAME
+	,Referencing_Object_Id		BIGINT
+	,Referencing_Object_Type	SYSNAME
+
+	,Referenced_Database_Id		BIGINT
+	,Referenced_Schema_Id		BIGINT
+	,Referenced_TableId			BIGINT
+	,Referenced_Object_Type		SYSNAME
+	,Referenced_Table_name		SYSNAME
+);
 
 ;WITH index_stats 
 AS 
@@ -149,6 +166,7 @@ IF OBJECT_ID(''tempdb..#Tables'') IS NOT NULL
 
 INSERT  INTO	#AllTables
 SELECT	 DatabaseId		= DB_ID()
+		,SchemaName		= SCHEMA_NAME(schema_id)
 		,SchemaId		= schema_id
 		,TableId		= object_id
 		,TableName		= name
@@ -247,6 +265,41 @@ WHERE	dm_mid.database_ID = DB_ID()
 GROUP   BY
 		dm_mid.database_id, dm_mid.OBJECT_ID
 
+INSERT INTO
+	#dependencies
+SELECT 
+	 Referencing_DatabaseId		= DB_ID()
+	,Referencing_Object			= OBJECT_NAME(referencing_id, DB_ID())
+	,Referencing_Object_Id		= s.object_id
+	,Referencing_Object_Type	= s.type_desc
+
+	,Referenced_Database_Id		= CASE WHEN REFERENCED_SERVER_NAME IS NULL THEN DB_ID(ISNULL(referenced_database_name, DB_NAME())) ELSE -999 END
+	,Referenced_Schema_Id		= SCHEMA_ID(ISNULL(referenced_schema_name, ''dbo''))
+	,Referenced_TableId			= Referenced_id
+	,Referenced_Object_Type		= T.type_desc
+	,Referenced_Table_name		= Referenced_entity_name
+
+FROM	sys.sql_expression_dependencies	seq
+JOIN	sys.objects							T	ON	T.name = seq.referenced_entity_name
+LEFT
+JOIN	sys.objects							S	ON	S.object_id = referencing_id
+
+
+INSERT INTO 
+	#dependencies 
+SELECT	 Referencing_DatabaseId		= DB_ID()
+		,Referencing_Object			= TT.name
+		,Referencing_Object_Id		= TT.object_id
+		,Referencing_Object_Type	= TT.type_desc
+
+		,Referenced_Database_Id		= DB_ID()
+		,Referenced_Schema_Id		= st.Schema_id
+		,Referenced_TableId			= SR.rkeyid
+		,Referenced_Object_Type		= ST.type_desc
+		,Referenced_Table_name		= ST.name
+FROM	sys.sysreferences	sr
+JOIN	sys.tables			TT	ON	TT.object_id	= fkeyid
+JOIN	sys.tables			st	ON	ST.object_id	= SR.rkeyid
 ';
 
 DECLARE
@@ -387,14 +440,33 @@ END
 CLOSE c;
 DEALLOCATE c;
 
+IF OBJECT_ID('tempdb..#DependencyCount') IS NOT NULL
+	DROP TABLE #DependencyCount
+SELECT	 DatabaseId = D.Referenced_Database_Id
+		,SchemaId   = D.Referenced_Schema_Id
+		,TableId	= D.Referenced_TableId
+		,TableReferenceCount	= SUM(CASE WHEN D.Referenced_Object_type IN ('USER_TABLE') THEN 1 ELSE 0 END)
+		,ProReferenceCount		= SUM(CASE WHEN D.Referenced_Object_type IN ('SQL_STORED_PROCEDURE') THEN 1 ELSE 0 END)
+		,OtherReferenceCount	= SUM(CASE WHEN D.Referenced_Object_type NOT IN ('SQL_STORED_PROCEDURE', 'USER_TABLE') THEN 1 ELSE 0 END)
+INTO	#DependencyCount
+FROM	#dependencies D
+GROUP BY
+	 D.Referenced_Database_Id
+	,D.Referenced_Schema_Id
+	,D.Referenced_TableId
+ORDER BY
+	 D.Referenced_Database_Id
+	,D.Referenced_Schema_Id
+	,D.Referenced_TableId
+
 IF OBJECT_ID('tempdb..#ResultDetail') IS NOT NULL
 	DROP TABLE #ResultDetail
-SELECT	 DatabaseName   = R.DatabaseName
-		,DatabaseId		= R.DatabaseId
-		,SchemaName		= R.SchemaName
-		,SchemaId		= R.SchemaId
-		,TableName		= R.TableName
-		,TableId		= R.TableId
+SELECT	 DatabaseName   = DB_NAME(A.DatabaseId)
+		,DatabaseId		= A.DatabaseId
+		,SchemaName		= A.SchemaName
+		,SchemaId		= A.SchemaId
+		,TableName		= A.TableName
+		,TableId		= A.TableId
 		,[RowCount]		= R.[RowCount]
 		,TotalSizeInMB  = R.TotalSizeInMB
 		,R.create_date
@@ -406,6 +478,9 @@ SELECT	 DatabaseName   = R.DatabaseName
 		,HasStats		= ISNULL(S.HasStats, 0)
 		,S.StatsUpdateDate
 		,MI.LastSeekDate
+		,TableReferenceCount	= ISNULL(D.TableReferenceCount, 0)
+		,ProReferenceCount		= ISNULL(D.ProReferenceCount, 0)
+		,OtherReferenceCount	= ISNULL(D.OtherReferenceCount, 0)
 INTO	#ResultDetail
 FROM	#AllTables A
 LEFT
@@ -424,9 +499,15 @@ LEFT
 JOIN	#TablesMissingIndexes		MI	ON	MI.DatabaseId	= A.DatabaseId
 										AND	MI.SchemaId		= A.SchemaId
 										AND	MI.TableId		= A.TableId
+LEFT
+JOIN	#DependencyCount			D	ON	D.DatabaseId	= A.DatabaseId
+										AND	D.SchemaId		= A.SchemaId
+										AND	D.TableId		= A.TableId
 ORDER BY
-		R.DatabaseName, R.SchemaName, R.TableName
+		DatabaseName, SchemaName, TableName
 
+SELECT	sqlserver_start_Time
+FROM	sys.dm_os_sys_info;
 
 SELECT	 [DB Name]				= R.DatabaseName   
 		,[Schema Name]			= R.SchemaName
@@ -442,7 +523,9 @@ SELECT	 [DB Name]				= R.DatabaseName
 		,HasStats				= CASE WHEN R.HasStats = 1 THEN 'Yes' ELSE 'No' END
 		,[Stats Updated*]		= R.StatsUpdateDate
 		,[Missing Index*]		= R.LastSeekDate
-
+		,[# of Table References]= TableReferenceCount
+		,[# of Proc References] = ProReferenceCount
+		,[# of other References]= OtherReferenceCount
 FROM	#ResultDetail R
 ORDER BY
 		R.DatabaseName, R.SchemaName, R.TableName
@@ -454,6 +537,7 @@ SELECT	 [DB Name]	=	DatabaseName
 		,[Last Used Date]		= LastestDate
 		,[Row Count]			= [RowCount]
 		,[Table Size (MB)]		= TotalSizeInMB
+		,[# Of References]		= TableReferenceCount + ProReferenceCount + OtherReferenceCount
 FROM	#ResultDetail R
 CROSS	APPLY
 		(
@@ -464,6 +548,12 @@ CROSS	APPLY
 		)	MD
 ORDER BY
 	R.DatabaseName, R.SchemaName, R.TableName
+
+-- Unique list of DBs in use.
+SELECT	DISTINCT [DB Name]				= R.DatabaseName   
+FROM	#ResultDetail R
+ORDER BY
+		R.DatabaseName
 
 /*
 -- Sanity Checks

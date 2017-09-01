@@ -36,13 +36,17 @@ IF OBJECT_ID('tempdb..#dependencies') IS NOT NULL
 	DROP TABLE #dependencies
 CREATE TABLE #dependencies
 (
-     referencing_database		VARCHAR(MAX)
-    ,referencing_schema			VARCHAR(MAX)
-    ,referencing_object_name	VARCHAR(MAX)
-    ,referenced_server			VARCHAR(MAX)
-    ,referenced_database		VARCHAR(MAX)
-    ,referenced_schema			VARCHAR(MAX)
-    ,referenced_object_name		VARCHAR(MAX)
+	 DatabaseName				SYSNAME
+	,SchemaName					SYSNAME
+	,ObjectName					SYSNAME
+	,ObjectType					SYSNAME
+	,ObjectId					BIGINT
+	,Referenced_ServerName		SYSNAME
+	,Referenced_DatabaseName	SYSNAME
+	,Referenced_SchemaName		SYSNAME
+	,Referenced_ObjectName		SYSNAME
+	,Referenced_ObjectType		SYSNAME
+	,Referenced_ObjectId		BIGINT
 );
 
 WHILE (SELECT COUNT(*) FROM #databases) > 0
@@ -55,17 +59,35 @@ BEGIN
 
 	BEGIN TRY
 
-		SET @sql = 'INSERT INTO #dependencies select 
-			DB_NAME(' + convert(varchar,@database_id) + '), 
-			OBJECT_SCHEMA_NAME(referencing_id,' 
-				+ convert(varchar,@database_id) +'), 
-			OBJECT_NAME(referencing_id,' + convert(varchar,@database_id) + '), 
-			referenced_server_name,
-			ISNULL(referenced_database_name, db_name(' 
-				 + convert(varchar,@database_id) + ')),
-			referenced_schema_name,
-			referenced_entity_name
-		FROM ' + quotename(@database_name) + '.sys.sql_expression_dependencies';
+		SET @sql = '
+					USE [' + @database_name + ']
+
+					INSERT INTO 
+						#dependencies 
+					SELECT 
+						 DatabaseName				= DB_NAME()
+						,SchemaName					= OBJECT_SCHEMA_NAME(referencing_id,' + convert(varchar,@database_id) +')
+						,ObjectName					= OBJECT_NAME(referencing_id,' + convert(varchar,@database_id) + ') 
+						,ObjectType					= s.type_desc
+						,ObjectId					= referencing_id
+						,Referenced_ServerName		= ISNULL(referenced_server_name, '''')
+						,Referenced_DatabaseName	= ISNULL(referenced_database_name, db_name('+ convert(varchar,@database_id) + '))
+						,Referenced_SchemaName		= referenced_Schema_name
+						,Referenced_ObjectName		= referenced_entity_name
+						,Referenced_ObjectType		= referenced_class_desc
+						,Referenced_ObjectId		= referenced_id
+
+					FROM	sys.sql_expression_dependencies	D
+					JOIN	sys.objects						S	ON	S.object_Id = D.referencing_id
+					WHERE	1 = 1
+					AND		(
+								(
+									D.referenced_database_name IN (SELECT	name FROM sys.databases)
+								AND	D.referenced_server_name IS NULL
+								)
+								OR    
+								(D.referenced_server_name IS NOT NULL)
+							)';
 
 		EXEC(@sql);
 	END TRY
@@ -82,24 +104,30 @@ BEGIN
 	DELETE FROM #databases WHERE database_id = @database_id;
 END;
 
+USE [master]
+GO
+
 SELECT	*
 FROM	#dependencies;
 
 -- Distinct List of Databases, dependent databases, and count of referenced objects
-SELECT	 [Database Name]			= referencing_database
-		,[Referenced Database]		= referenced_database
-		,[# of Referenced Objects]	= COUNT(DISTINCT referenced_object_name)
+SELECT	 [Database Name]			= DatabaseName
+		,[Referenced Server]		= ISNULL(Referenced_ServerName, '')
+		,[Referenced Database]		= Referenced_DatabaseName
+		,[# of Referenced Objects]	= COUNT(DISTINCT Referenced_ObjectName)
 FROM	#dependencies 
-WHERE	referencing_database != referenced_database
+WHERE	DatabaseName != Referenced_DatabaseName
 GROUP BY
-		 referencing_database
-		,referenced_database
+		 DatabaseName
+		,ISNULL(Referenced_ServerName, '')
+		,Referenced_DatabaseName
 ORDER BY
-		 referencing_database
-		,referenced_database
+		 DatabaseName
+		,[Referenced Server]
+		,[Referenced Database]
 ;
 
 -- Distinct list of DBs in use
-SELECT DISTINCT [Database Name] =  referencing_database FROM #dependencies
+SELECT DISTINCT [Database Name] =  DatabaseName FROM #dependencies
 UNION 
-SELECT DISTINCT [Database Name] =  referenced_database FROM #dependencies;
+SELECT DISTINCT [Database Name] =  Referenced_DatabaseName FROM #dependencies;

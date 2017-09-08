@@ -146,7 +146,7 @@ create table #TABLE_SPACE
 declare @fetch_status int
 
 declare @proc 	varchar(200)
-select	@proc	= rtrim(db_name())+'.dbo.sp_spaceused'
+select	@proc	= 'dbo.sp_spaceused'
 
 declare Cur_Cursor cursor local
 for
@@ -157,6 +157,7 @@ from
 	INFORMATION_SCHEMA.TABLES 
 where
 	TABLE_TYPE	= 'BASE TABLE'
+AND TABLE_NAME NOT LIKE '%.%'
 order by
 	1
 

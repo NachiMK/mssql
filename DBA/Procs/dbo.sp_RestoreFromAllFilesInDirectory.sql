@@ -1,14 +1,16 @@
-USE DBATools
-GO
-IF OBJECT_ID('dbo.sp_RestoreFromAllFilesInDirectory') IS NOT NULL
-	DROP PROC dbo.sp_RestoreFromAllFilesInDirectory
+USE [DBATools]
 GO
 
-CREATE PROCEDURE dbo.sp_RestoreFromAllFilesInDirectory
+IF OBJECT_ID('dbo.sp_RestoreFromAllFilesInDirectory') IS NOT NULL
+	DROP PROCEDURE [dbo].[sp_RestoreFromAllFilesInDirectory]
+GO
+
+CREATE PROCEDURE [dbo].[sp_RestoreFromAllFilesInDirectory]
 (
 	 @SourceDirBackupFiles	NVARCHAR(200)
 	,@DestDirDbFiles		NVARCHAR(200)
 	,@DestDirLogFiles		NVARCHAR(200) 
+	,@OnlyPrintCommands		BIT				=	NULL
 )
 AS
 BEGIN
@@ -23,6 +25,8 @@ BEGIN
 	-- EXEC sp_RestoreFromAllFilesInDirectory 'C:\Mybakfiles\', 'D:\Mydatabasesdirectory\' ,’C:\MylogDirectory\’ 
 
 	SET NOCOUNT ON
+
+	SET @OnlyPrintCommands = ISNULL(@OnlyPrintCommands, 1)
 
 	--Table to hold each backup file name in
 	IF OBJECT_ID('tempdb..#files') IS NOT NULL
@@ -42,99 +46,122 @@ BEGIN
 	OR		file_ = 0
 
 	--Table to hold the result from RESTORE HEADERONLY. Needed to get the database name out from
+	IF OBJECT_ID('tempdb..#bdev') IS NOT NULL
+		DROP TABLE #bdev
 	CREATE TABLE #bdev
 	(
-	 BackupName nvarchar(128) 
-	,BackupDescription nvarchar(255) 
-	,BackupType smallint
-	,ExpirationDate datetime
-	,Compressed tinyint
-	,Position smallint
-	,DeviceType tinyint
-	,UserName nvarchar(128) 
-	,ServerName nvarchar(128) 
-	,DatabaseName nvarchar(128) 
-	,DatabaseVersion bigint
-	,DatabaseCreationDate datetime
-	,BackupSize numeric(20,0)
-	,FirstLSN numeric(25,0)
-	,LastLSN numeric(25,0)
-	,CheckpointLSN numeric(25,0)
-	,DatabaseBackupLSN numeric(25,0)
-	,BackupStartDate datetime
-	,BackupFinishDate datetime
-	,SortOrder smallint
-	,[CodePage] smallint
-	,UnicodeLocaleId bigint
-	,UnicodeComparisonStyle bigint
-	,CompatibilityLevel tinyint
-	,SoftwareVendorId bigint
-	,SoftwareVersionMajor bigint
-	,SoftwareVersionMinor bigint
-	,SoftwareVersionBuild bigint
-	,MachineName nvarchar(128) 
-	,Flags bigint
-	,BindingID uniqueidentifier
-	,RecoveryForkID uniqueidentifier
-	,Collation nvarchar(128) 
-	,FamilyGUID uniqueidentifier
-	,HasBulkLoggedData bigint
-	,IsSnapshot bigint
-	,IsReadOnly bigint
-	,IsSingleUser bigint
-	,HasBackupChecksums bigint
-	,IsDamaged bigint
-	,BegibsLogChain bigint
-	,HasIncompleteMetaData bigint
-	,IsForceOffline bigint
-	,IsCopyOnly bigint
-	,FirstRecoveryForkID uniqueidentifier
-	,ForkPointLSN numeric(25,0)
-	,RecoveryModel nvarchar(128) 
-	,DifferentialBaseLSN numeric(25,0)
-	,DifferentialBaseGUID uniqueidentifier
-	,BackupTypeDescription nvarchar(128) 
-	,BackupSetGUID uniqueidentifier
-	,CompressedBackupSize bigint
-	,Containment bigint
-	, KeyAlgorithm nvarchar(32)
-	, EncryptorThumbprint varbinary(20)
-	, EncryptorType nvarchar(23)
+	 BackupName				NVARCHAR(128) 
+	,BackupDescription		NVARCHAR(255) 
+	,BackupType				SMALLINT
+	,ExpirationDate			DATETIME
+	,Compressed				TINYINT
+	,Position				SMALLINT
+	,DeviceType				TINYINT
+	,UserName				NVARCHAR(128) 
+	,ServerName				NVARCHAR(128) 
+	,DatabaseName			NVARCHAR(128) 
+	,DatabaseVersion		BIGINT
+	,DatabaseCreationDate	DATETIME
+	,BackupSize				NUMERIC(20,0)
+	,FirstLSN				NUMERIC(25,0)
+	,LastLSN				NUMERIC(25,0)
+	,CheckpointLSN			NUMERIC(25,0)
+	,DatabaseBackupLSN		NUMERIC(25,0)
+	,BackupStartDate		DATETIME
+	,BackupFinishDate		DATETIME
+	,SortOrder				SMALLINT
+	,[CodePage]				SMALLINT
+	,UnicodeLocaleId		BIGINT
+	,UnicodeComparisonStyle	BIGINT
+	,CompatibilityLevel		TINYINT
+	,SoftwareVendorId		BIGINT
+	,SoftwareVersionMajor	BIGINT
+	,SoftwareVersionMinor	BIGINT
+	,SoftwareVersionBuild	BIGINT
+	,MachineName			NVARCHAR(128) 
+	,Flags					BIGINT
+	,BindingID				UNIQUEIDENTIFIER
+	,RecoveryForkID			UNIQUEIDENTIFIER
+	,Collation				NVARCHAR(128) 
+	,FamilyGUID				UNIQUEIDENTIFIER
+	,HasBulkLoggedData		BIGINT
+	,IsSnapshot				BIGINT
+	,IsReadOnly				BIGINT
+	,IsSingleUser			BIGINT
+	,HasBackupChecksums		BIGINT
+	,IsDamaged				BIGINT
+	,BegibsLogChain			BIGINT
+	,HasIncompleteMetaData	BIGINT
+	,IsForceOffline			BIGINT
+	,IsCopyOnly				BIGINT
+	,FirstRecoveryForkID	UNIQUEIDENTIFIER
+	,ForkPointLSN			NUMERIC(25,0)
+	,RecoveryModel			NVARCHAR(128) 
+	,DifferentialBaseLSN	NUMERIC(25,0)
+	,DifferentialBaseGUID	UNIQUEIDENTIFIER
+	,BackupTypeDescription	NVARCHAR(128) 
+	,BackupSetGUID			UNIQUEIDENTIFIER
+	,CompressedBackupSize	BIGINT
+	,Containment			BIGINT
+	, KeyAlgorithm			NVARCHAR(32)
+	, EncryptorThumbprint	VARBINARY(20)
+	, EncryptorType			NVARCHAR(23)
 	)
 
 	--Table to hold result from RESTORE FILELISTONLY. Need to generate the MOVE options to the RESTORE command
+	IF OBJECT_ID('tempdb..#dbfiles') IS NOT NULL
+		DROP TABLE #dbfiles
 	CREATE TABLE #dbfiles
 	(
-	 LogicalName nvarchar(128) 
-	,PhysicalName nvarchar(260) 
-	,[Type] char(1) 
-	,FileGroupName nvarchar(128) 
-	,Size numeric(20,0)
-	,MaxSize numeric(20,0)
-	,FileId bigint
-	,CreateLSN numeric(25,0)
-	,DropLSN numeric(25,0)
-	,UniqueId uniqueidentifier
-	,ReadOnlyLSN numeric(25,0)
-	,ReadWriteLSN numeric(25,0)
-	,BackupSizeInBytes bigint
-	,SourceBlockSize bigint
-	,FilegroupId bigint
-	,LogGroupGUID uniqueidentifier
-	,DifferentialBaseLSN numeric(25)
-	,DifferentialBaseGUID uniqueidentifier
-	,IsReadOnly bigint
-	,IsPresent int 
-	,TDEThumbprint uniqueidentifier
+	 LogicalName			NVARCHAR(128) 
+	,PhysicalName			NVARCHAR(260) 
+	,[Type]					CHAR(1) 
+	,FileGroupName			NVARCHAR(128) 
+	,Size					NUMERIC(20,0)
+	,MaxSize				NUMERIC(20,0)
+	,FileId					BIGINT
+	,CreateLSN				NUMERIC(25,0)
+	,DropLSN				NUMERIC(25,0)
+	,UniqueId				UNIQUEIDENTIFIER
+	,ReadOnlyLSN			NUMERIC(25,0)
+	,ReadWriteLSN			NUMERIC(25,0)
+	,BackupSizeInBytes		BIGINT
+	,SourceBlockSize		BIGINT
+	,FilegroupId			BIGINT
+	,LogGroupGUID			UNIQUEIDENTIFIER
+	,DifferentialBaseLSN	NUMERIC(25)
+	,DifferentialBaseGUID	UNIQUEIDENTIFIER
+	,IsReadOnly				BIGINT
+	,IsPresent				INT 
+	,TDEThumbprint			UNIQUEIDENTIFIER
 	)
 
-	DECLARE @fname varchar(200) 
-	DECLARE @dirfile varchar(300) 
-	DECLARE @LogicalName nvarchar(128) 
-	DECLARE @PhysicalName nvarchar(260) 
-	DECLARE @type char(1) 
-	DECLARE @DbName sysname 
-	DECLARE @sql nvarchar(1000) 
+	DECLARE @fname			VARCHAR(200) 
+	DECLARE @dirfile		VARCHAR(300) 
+	DECLARE @LogicalName	NVARCHAR(128) 
+	DECLARE @PhysicalName	NVARCHAR(260) 
+	DECLARE @type			CHAR(1) 
+	DECLARE @DbName			SYSNAME 
+	DECLARE @sql			NVARCHAR(1000) 
+
+	
+	IF LEN(@SourceDirBackupFiles) > 0 AND (RIGHT(@SourceDirBackupFiles, 1) != '\')
+		SET @SourceDirBackupFiles = @SourceDirBackupFiles + N'\'
+
+	IF LEN(@DestDirDbFiles) > 0 AND (RIGHT(@DestDirDbFiles, 1) != '\')
+		SET @DestDirDbFiles = @DestDirDbFiles + N'\'
+
+	IF LEN(@DestDirLogFiles) > 0 AND (RIGHT(@DestDirLogFiles, 1) != '\')
+		SET @DestDirLogFiles = @DestDirLogFiles + N'\'
+
+	IF @OnlyPrintCommands = 1
+	BEGIN
+		PRINT '----- PARAMS -----'
+		PRINT 'Backup Dir:' + @SourceDirBackupFiles
+		PRINT 'Data Dir  :' + @DestDirDbFiles
+		PRINT 'Log Dir   :' + @DestDirLogFiles
+		PRINT '----- PARAMS -----'
+	END
 
 	DECLARE files CURSOR LOCAL READ_ONLY FAST_FORWARD FOR
 
@@ -166,21 +193,25 @@ BEGIN
 
 		OPEN dbfiles
 		FETCH NEXT FROM dbfiles INTO @LogicalName, @PhysicalName, @type
+		
 		--For each database file that the database uses
 		WHILE @@FETCH_STATUS = 0
 		BEGIN
-		IF @type = 'D'
-		SET @sql = @sql + '''' + @LogicalName + ''' TO ''' + @DestDirDbFiles + @DbName + '.mdf'', MOVE '
-		ELSE IF @type = 'L'
-		SET @sql = @sql + '''' + @LogicalName + ''' TO ''' + @DestDirLogFiles + @DbName + '_log.ldf'''
-		FETCH NEXT FROM dbfiles INTO @LogicalName, @PhysicalName, @type
+			IF @type = 'D'
+				SET @sql = @sql + '''' + @LogicalName + ''' TO ''' + @DestDirDbFiles + @DbName + '.mdf'', MOVE '
+			ELSE IF @type = 'L'
+				SET @sql = @sql + '''' + @LogicalName + ''' TO ''' + @DestDirLogFiles + @DbName + '_log.ldf'''
+		
+		
+			FETCH NEXT FROM dbfiles INTO @LogicalName, @PhysicalName, @type
 		END
 
 		--Here's the actual RESTORE command 
 		PRINT @sql 
 
 		--Remove the comment below if you want the procedure to actually execute the restore command. 
-		--EXEC(@sql) 
+		IF @OnlyPrintCommands = 0
+			EXEC(@sql) 
 
 		CLOSE dbfiles 
 		FETCH NEXT FROM files INTO @fname 
@@ -191,4 +222,21 @@ BEGIN
 	DEALLOCATE files 
 
 END
+
 GO
+
+/*
+	-- Testing Code
+	EXEC [dbo].[sp_RestoreFromAllFilesInDirectory]
+	 @SourceDirBackupFiles	= 'C:\SQL\SQL_BACKUP\Products'
+	,@DestDirDbFiles		= 'C:\SQL\SQL_DATA'
+	,@DestDirLogFiles		= 'C:\SQL\SQL_LOG'
+	,@OnlyPrintCommands		=	1
+
+	EXEC [dbo].[sp_RestoreFromAllFilesInDirectory]
+	 @SourceDirBackupFiles	= 'D:\SQL_BACKUP'
+	,@DestDirDbFiles		= 'D:\SQL_DATA'
+	,@DestDirLogFiles		= 'D:\SQL_LOG'
+	,@OnlyPrintCommands		=	1
+
+*/

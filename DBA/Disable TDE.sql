@@ -1,9 +1,9 @@
 /*
 	Disable encryption
 */
-DECLARE @DBName					SYSNAME = 'Amazon'	-- SET THIS TO DATABASE YOU WANT TO DISABLE ENCRYPTION
+DECLARE @DBName					SYSNAME = 'vlm6-nmhc'	-- SET THIS TO DATABASE YOU WANT TO DISABLE ENCRYPTION
 DECLARE @print_commands_only	BIT = 1				-- SET THIS TO 0 to actually run the script, setting to 1 will just print the actual commands
-DECLARE @BackupDirectory		NVARCHAR(400) = 'C:\SQL\SQL_BACKUP\'	-- Localtion were backup should be kept. If null or empty it will be set to default backup location
+DECLARE @BackupDirectory		NVARCHAR(400) = 'G:\SQL_BACKUP\'	-- Localtion were backup should be kept. If null or empty it will be set to default backup location
 
 SET @DBName = ISNULL(@DBName, '')
 SET @print_commands_only = ISNULL(@print_commands_only, 1)
@@ -73,13 +73,21 @@ SET @SqlShrinkDB = ''DBCC SHRINKDATABASE(N'''''' + DB_NAME() + '''''')
 
 SET @ShrinkDBScript = 
 ''
-USE ?
+USE [?]
 '' 
- + ''ALTER DATABASE ? SET RECOVERY SIMPLE;''
+ + ''
+
+ DECLARE @RecoveryModel INT = 0
+ SELECT @RecoveryModel = 1 FROM sys.databases WHERE name = ''''?'''' AND recovery_model = 1
+
+ IF (@RecoveryModel = 1)
+    ALTER DATABASE [?] SET RECOVERY SIMPLE;''
  + @SqlShrinkFiles
  + @SqlShrinkLogFiles
  + @SqlShrinkDB
- + ''ALTER DATABASE ? SET RECOVERY FULL;''
+ + ''
+ IF (@RecoveryModel = 1)
+     ALTER DATABASE [?] SET RECOVERY FULL;''
 
 '
 SET @SqlShrinkCmd = REPLACE(@SqlShrinkCmd, '?', @DBName)

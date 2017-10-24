@@ -87,7 +87,44 @@ BEGIN
 								)
 								OR    
 								(D.referenced_server_name IS NOT NULL)
-							)';
+							)
+				
+				INSERT INTO
+					#dependencies
+				SELECT 
+					 DatabaseName				= DB_NAME()
+					,SchemaName					= ''dbo''
+					,ObjectName					= OBJECT_NAME(referencing_id, DB_ID())
+					,ObjectType					= s.type_desc
+					,ObjectId					= s.object_id
+					,Referenced_ServerName		= ISNULL(referenced_server_name, '''')
+					,Referenced_DatabaseName	= CASE WHEN REFERENCED_SERVER_NAME IS NULL THEN ISNULL(referenced_database_name, DB_NAME()) ELSE '''' END
+					,Referenced_SchemaName		= ISNULL(NULLIF(referenced_schema_name, ''''), ''dbo'')
+					,Referenced_ObjectName		= Referenced_entity_name
+					,Referenced_ObjectType		= T.type_desc
+					,Referenced_ObjectId		= Referenced_id
+				FROM	sys.sql_expression_dependencies	seq
+				JOIN	sys.objects							T	ON	T.name = seq.referenced_entity_name
+				LEFT
+				JOIN	sys.objects							S	ON	S.object_id = referencing_id
+
+
+				INSERT INTO
+						#dependencies
+				SELECT	 DatabaseName				= DB_NAME()
+						,SchemaName					= OBJECT_SCHEMA_NAME(S.object_id,' + convert(varchar,@database_id) +')
+						,ObjectName					= S.name
+						,ObjectType					= O.type_desc
+						,ObjectId					= S.object_id
+						,Referenced_ServerName		= COALESCE(PARSENAME(S.base_object_name,4),@@SERVERNAME)
+						,Referenced_DatabaseName	= COALESCE(PARSENAME(S.base_object_name,3),DB_NAME(DB_ID()))
+						,Referenced_SchemaName		= COALESCE(PARSENAME(S.base_object_name,2),''dbo'')
+						,Referenced_ObjectName		= COALESCE(PARSENAME(S.base_object_name,1), S.base_object_name)
+						,Referenced_ObjectType		= CONVERT(NVARCHAR(256), OBJECTPROPERTYEX(OBJECT_ID(S.name), ''BaseType''))
+						,Referenced_ObjectId		= -1 * S.object_Id
+				FROM	SYS.SYNONYMS	S
+				JOIN	SYS.OBJECTS		O	ON S.object_id = O.object_id
+				';
 
 		EXEC(@sql);
 	END TRY
@@ -108,7 +145,7 @@ USE [master]
 GO
 
 SELECT	*
-FROM	#dependencies;
+FROM	#dependencies
 
 -- Distinct List of Databases, dependent databases, and count of referenced objects
 SELECT	 [Database Name]			= DatabaseName

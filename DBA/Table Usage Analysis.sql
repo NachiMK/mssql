@@ -27,7 +27,7 @@
 		5. If Last Used date < 6 months from today then mark as not used.
 */
 
-USE [master];
+USE [DBA];
 GO
 
 SET NOCOUNT ON;
@@ -274,7 +274,7 @@ SELECT
 	,Referencing_Object_Type	= s.type_desc
 
 	,Referenced_Database_Id		= CASE WHEN REFERENCED_SERVER_NAME IS NULL THEN DB_ID(ISNULL(referenced_database_name, DB_NAME())) ELSE -999 END
-	,Referenced_Schema_Id		= SCHEMA_ID(ISNULL(referenced_schema_name, ''dbo''))
+	,Referenced_Schema_Id		= SCHEMA_ID(ISNULL(NULLIF(referenced_schema_name, ''''), ''dbo''))
 	,Referenced_TableId			= Referenced_id
 	,Referenced_Object_Type		= T.type_desc
 	,Referenced_Table_name		= Referenced_entity_name
@@ -293,13 +293,30 @@ SELECT	 Referencing_DatabaseId		= DB_ID()
 		,Referencing_Object_Type	= TT.type_desc
 
 		,Referenced_Database_Id		= DB_ID()
-		,Referenced_Schema_Id		= st.Schema_id
+		,Referenced_Schema_Id		= ISNULL(st.Schema_id, SCHEMA_ID(''dbo''))
 		,Referenced_TableId			= SR.rkeyid
 		,Referenced_Object_Type		= ST.type_desc
 		,Referenced_Table_name		= ST.name
 FROM	sys.sysreferences	sr
 JOIN	sys.tables			TT	ON	TT.object_id	= fkeyid
 JOIN	sys.tables			st	ON	ST.object_id	= SR.rkeyid
+
+INSERT INTO 
+	#dependencies
+SELECT	 Referencing_DatabaseId		= DB_ID()
+		,Referencing_Object			= S.name
+		,Referencing_Object_Id		= S.object_id
+		,Referencing_Object_Type	= S.type_desc
+
+		,Referenced_Database_Id		= COALESCE(DB_ID(PARSENAME(S.base_object_name,3)),DB_ID())
+		,Referenced_Schema_Id		= COALESCE(SCHEMA_ID(PARSENAME(S.base_object_name,2)),SCHEMA_ID())
+		,Referenced_TableId			= CASE WHEN PARSENAME(S.base_object_name,4) IS NULL 
+										THEN OBJECT_ID(S.base_object_name) ELSE -1 * object_id(S.name)
+									  END
+		,Referenced_Object_Type		= CONVERT(NVARCHAR(256), OBJECTPROPERTYEX(OBJECT_ID(S.name), ''BaseType''))
+		,Referenced_Table_name		= PARSENAME(S.base_object_name,1)
+FROM	SYS.SYNONYMS	S
+JOIN	SYS.OBJECTS		O	ON S.object_id = O.object_id
 ';
 
 DECLARE
@@ -506,35 +523,129 @@ JOIN	#DependencyCount			D	ON	D.DatabaseId	= A.DatabaseId
 ORDER BY
 		DatabaseName, SchemaName, TableName
 
-SELECT	sqlserver_start_Time
+IF OBJECT_ID('dbo.DataSeedTableUsage') IS NULL
+BEGIN
+	-- DROP TABLE dbo.DataSeedTableUsage
+	CREATE TABLE dbo.DataSeedTableUsage
+	(
+		 DataSeedTableUsageID	BIGINT			NOT NULL IDENTITY(1, 1)
+		,DatabaseName			NVARCHAR(256)	NOT NULL
+		,DatabaseId				BIGINT			NOT NULL
+		,SchemaName				NVARCHAR(256)	NOT NULL
+		,SchemaId				BIGINT			NOT NULL
+		,TableName				NVARCHAR(256)	NOT NULL
+		,TableId				BIGINT			NOT NULL
+		,[RowCount]				BIGINT			NOT NULL
+		,TotalSizeInMB			DECIMAL			NULL
+		,create_date			DATETIME2		NOT NULL
+		,modify_date			DATETIME2		NOT NULL
+		,ReadCount				BIGINT			NULL
+		,WriteCount				BIGINT			NULL
+		,LastReadDate			DATETIME2		NULL
+		,LastWriteDate			DATETIME2		NULL
+		,HasStats				BIT				NULL
+		,StatsUpdateDate		DATETIME2		NULL
+		,LastSeekDate			DATETIME2		NULL
+		,TableReferenceCount	INT				NULL
+		,ProReferenceCount		INT				NULL
+		,OtherReferenceCount	INT				NULL
+		,ServerRestartDtTm		DATETIME2		NOT NULL
+		,RecordCreatedDtTm		DATETIME2		NOT NULL CONSTRAINT DF_DataSeedTableUsage_CreatedDtTm DEFAULT GETDATE()
+		,BatchSeqNumber			BIGINT			NOT NULL
+	)
+	CREATE NONCLUSTERED INDEX [IDX_DB_Schema_Table] ON dbo.DataSeedTableUsage(DatabaseName, SchemaName, TableName)
+
+	CREATE SEQUENCE [dbo].[SQ_DataSeedTableUsage_Batch]  START WITH 10 INCREMENT BY 10
+END
+
+
+DECLARE @ServerStartDtTm DATETIME2
+SELECT	@ServerStartDtTm = sqlserver_start_Time FROM sys.dm_os_sys_info;
+
+DECLARE @BatchSeqNum BIGINT
+SET @BatchSeqNum = NEXT VALUE FOR [dbo].[SQ_DataSeedTableUsage_Batch]
+
+INSERT INTO
+		dbo.DataSeedTableUsage
+		(
+		 DatabaseName			
+		,DatabaseId				
+		,SchemaName				
+		,SchemaId				
+		,TableName				
+		,TableId				
+		,[RowCount]				
+		,TotalSizeInMB			
+		,create_date			
+		,modify_date			
+		,ReadCount				
+		,WriteCount				
+		,LastReadDate			
+		,LastWriteDate			
+		,HasStats				
+		,StatsUpdateDate		
+		,LastSeekDate			
+		,TableReferenceCount	
+		,ProReferenceCount		
+		,OtherReferenceCount	
+		,ServerRestartDtTm		
+		,BatchSeqNumber
+		)
+SELECT	 DatabaseName			
+		,DatabaseId				
+		,SchemaName				
+		,SchemaId				
+		,TableName				
+		,TableId				
+		,[RowCount]				
+		,TotalSizeInMB			
+		,create_date			
+		,modify_date			
+		,ReadCount				
+		,WriteCount				
+		,LastReadDate			
+		,LastWriteDate			
+		,HasStats				
+		,StatsUpdateDate		
+		,LastSeekDate			
+		,TableReferenceCount	
+		,ProReferenceCount		
+		,OtherReferenceCount	
+		,ServerRestartDtTm		=	@ServerStartDtTm
+		,BatchSeqNumber			=	@BatchSeqNum
+FROM	#ResultDetail		R
+
+SELECT	sqlserver_start_Time, BatchSeqNum = @BatchSeqNum
 FROM	sys.dm_os_sys_info;
 
 SELECT	 [DB Name]				= R.DatabaseName   
 		,[Schema Name]			= R.SchemaName
-		,[Table Name]			= R.TableName
+		,[Table Name]			= R.SchemaName + '.' + R.TableName
 		,[Row Count]			= R.[RowCount]
 		,[Table Size (MB)]		= R.TotalSizeInMB
-		,[Table Created On**]	= R.create_date
-		,[Table Modified On**]	= R.modify_date
+		,[Table Created On**]	= CONVERT(DATE, R.create_date, 101)
+		,[Table Modified On**]	= CONVERT(DATE, R.modify_date, 101)
 		,[Total Reads*]			= R.ReadCount
 		,[Total Writes*]		= R.WriteCount
-		,[Last Read Date*]		= R.LastReadDate
-		,[Last Write Date*]		= R.LastWriteDate
+		,[Last Read Date*]		= CONVERT(DATE, R.LastReadDate, 101)
+		,[Last Write Date*]		= CONVERT(DATE, R.LastWriteDate, 101)
 		,HasStats				= CASE WHEN R.HasStats = 1 THEN 'Yes' ELSE 'No' END
-		,[Stats Updated*]		= R.StatsUpdateDate
-		,[Missing Index*]		= R.LastSeekDate
+		,[Stats Updated*]		= CONVERT(DATE, R.StatsUpdateDate, 101)
+		,[Missing Index*]		= CONVERT(DATE, R.LastSeekDate, 101)
 		,[# of Table References]= TableReferenceCount
 		,[# of Proc References] = ProReferenceCount
 		,[# of other References]= OtherReferenceCount
-FROM	#ResultDetail R
+FROM	DataSeedTableUsage R
+WHERE	BatchSeqNumber			=	@BatchSeqNum
 ORDER BY
 		R.DatabaseName, R.SchemaName, R.TableName
 
+
 SELECT	 [DB Name]	=	DatabaseName
 		,[SchemaId] =	SchemaName
-		,[TableId]	=	TableName
-		,[Used Since 7/30/2017]	= CASE WHEN (LastestDate > DATEADD(mm, -6, GETDATE())) THEN 'Yes' ELSE 'No' END
-		,[Last Used Date]		= LastestDate
+		,[TableId]	=	SchemaName + '.' + TableName
+		,[Used Since 10/01/2017]	= CASE WHEN (LastestDate > DATEADD(mm, -6, GETDATE())) THEN 'Yes' ELSE 'No' END
+		,[Last Used Date]		= CONVERT(DATE, LastestDate, 101)
 		,[Row Count]			= [RowCount]
 		,[Table Size (MB)]		= TotalSizeInMB
 		,[# Of References]		= TableReferenceCount + ProReferenceCount + OtherReferenceCount
@@ -549,11 +660,48 @@ CROSS	APPLY
 ORDER BY
 	R.DatabaseName, R.SchemaName, R.TableName
 
--- Unique list of DBs in use.
+-- Unique list of DBs
 SELECT	DISTINCT [DB Name]				= R.DatabaseName   
 FROM	#ResultDetail R
 ORDER BY
 		R.DatabaseName
+
+-- Unique list of DBs NOT used Since last 6 months.
+SELECT	DISTINCT [DB Name]				= R.DatabaseName   
+FROM	#ResultDetail R
+WHERE	R.DatabaseName NOT IN
+(
+SELECT	DISTINCT DatabaseName
+FROM	#ResultDetail
+WHERE 
+	ISNULL(create_date, '1/1/2000')		> '5/1/2017'
+OR ISNULL(modify_date, '1/1/2000')		> '5/1/2017'
+OR ISNULL(LastReadDate, '1/1/2000')		> '5/1/2017'
+OR ISNULL(LastWriteDate, '1/1/2000')	> '5/1/2017'
+OR ISNULL(StatsUpdateDate, '1/1/2000')	> '5/1/2017'
+OR ISNULL(LastSeekDate, '1/1/2000')		> '5/1/2017'
+)
+ORDER BY
+		R.DatabaseName
+
+SELECT	*
+FROM	#ResultDetail
+WHERE	DatabaseName IN (
+SELECT	DISTINCT [DB Name]				= R.DatabaseName   
+FROM	#ResultDetail R
+WHERE	R.DatabaseName NOT IN
+(
+SELECT	DISTINCT DatabaseName
+FROM	#ResultDetail
+WHERE 
+	ISNULL(create_date, '1/1/2000')		> '5/1/2017'
+OR ISNULL(modify_date, '1/1/2000')		> '5/1/2017'
+OR ISNULL(LastReadDate, '1/1/2000')		> '5/1/2017'
+OR ISNULL(LastWriteDate, '1/1/2000')	> '5/1/2017'
+OR ISNULL(StatsUpdateDate, '1/1/2000')	> '5/1/2017'
+OR ISNULL(LastSeekDate, '1/1/2000')		> '5/1/2017'
+)
+)
 
 /*
 -- Sanity Checks
@@ -593,5 +741,27 @@ APPLY	(
 		) C
 GROUP BY
 		DatabaseId 
+
+SELECT	*
+FROM	#AllTables A
+WHERE	DatabaseId = DB_ID('Private')
+AND		TableID  = 725577623
+
+SELECT * 
+FROM   #TableRowCount
+WHERE	TableID  = 725577623
+
+SELECT	*
+FROM	#dependencies
+WHERE	Referenced_TableId = 62735732
+
+SELECT	*
+FROM	#dependencies
+WHERE	Referencing_object = 'spDailySalesRepository_CreateDailySalesProductsData'
+
+SELECT	*, DB_NAME(DatabaseId)
+FROM	#DependencyCount
+WHERE	TableId = 725577623
+
 
 */
